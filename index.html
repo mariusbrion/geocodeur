@@ -101,9 +101,21 @@
             <h2 class="text-2xl font-bold mb-2">Géocodage terminé !</h2>
             <div id="stats-summary" class="text-sm text-slate-600 mb-8 space-y-1"></div>
             
-            <a id="download-link" href="#" class="inline-flex items-center px-8 py-3 bg-green-600 text-white font-bold rounded-xl hover:bg-green-700 shadow-lg shadow-green-200 transition">
-                Télécharger le fichier enrichi (.csv)
-            </a>
+            <div class="flex flex-col sm:flex-row justify-center gap-4">
+                <a id="download-link" href="#" class="inline-flex items-center px-6 py-3 bg-green-600 text-white font-bold rounded-xl hover:bg-green-700 shadow-lg shadow-green-200 transition">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    Télécharger CSV
+                </a>
+
+                <a id="download-geojson" href="#" class="inline-flex items-center px-6 py-3 bg-purple-600 text-white font-bold rounded-xl hover:bg-purple-700 shadow-lg shadow-purple-200 transition">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+                    </svg>
+                    Télécharger GeoJSON
+                </a>
+            </div>
 
             <div class="mt-8">
                 <button onclick="window.location.reload()" class="text-blue-600 hover:underline text-sm font-medium">Nouvelle analyse</button>
@@ -200,7 +212,6 @@
 
         async function geocodeNominatim(query) {
             try {
-                // On respecte la charte Nominatim : User-Agent et 1 req/sec max
                 const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=1&countrycodes=fr`;
                 const res = await fetch(url, { headers: { 'Accept-Language': 'fr' } });
                 const data = await res.json();
@@ -209,13 +220,30 @@
                     return {
                         lat: best.lat,
                         lon: best.lon,
-                        score: 1.0, // Nominatim ne donne pas de score comparable directement
+                        score: 1.0,
                         label: best.display_name,
                         source: 'Nominatim'
                     };
                 }
             } catch (e) { console.error("Nominatim error", e); }
             return null;
+        }
+
+        function convertToGeoJSON(data) {
+            const features = data
+                .filter(row => row.lat && row.lon)
+                .map(row => ({
+                    type: "Feature",
+                    geometry: {
+                        type: "Point",
+                        coordinates: [parseFloat(row.lon), parseFloat(row.lat)]
+                    },
+                    properties: row
+                }));
+            return JSON.stringify({
+                type: "FeatureCollection",
+                features: features
+            }, null, 2);
         }
 
         document.getElementById('btn-process').onclick = async () => {
@@ -246,16 +274,14 @@
 
                 let geo = await geocodeBAN(query);
 
-                // Si BAN "floppe" (pas de résultat ou score trop bas)
                 if ((!geo || geo.score < threshold) && useFallback) {
-                    // Délai pour respecter Nominatim (uniquement si on l'appelle)
-                    if (i > 0) await new Promise(r => setTimeout(r, 800)); 
+                    if (i > 0) await new Promise(r => setTimeout(r, 850)); 
                     const geoNom = await geocodeNominatim(query);
                     if (geoNom) {
                         geo = geoNom;
                         countNom++;
                     } else if (geo) {
-                        countBan++; // On garde le mauvais résultat BAN faute de mieux
+                        countBan++; 
                     } else {
                         countFail++;
                     }
@@ -275,18 +301,22 @@
                 });
             }
 
-            // Finalisation
+            // Génération CSV
             const csv = Papa.unparse(results);
-            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-            const url = URL.createObjectURL(blob);
+            const csvBlob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            document.getElementById('download-link').href = URL.createObjectURL(csvBlob);
+            document.getElementById('download-link').download = `geocoded_result.csv`;
             
-            document.getElementById('download-link').href = url;
-            document.getElementById('download-link').download = `geocoded_hybrid_result.csv`;
+            // Génération GeoJSON
+            const geojsonStr = convertToGeoJSON(results);
+            const geojsonBlob = new Blob([geojsonStr], { type: 'application/json;charset=utf-8;' });
+            document.getElementById('download-geojson').href = URL.createObjectURL(geojsonBlob);
+            document.getElementById('download-geojson').download = `geocoded_result.geojson`;
             
             document.getElementById('stats-summary').innerHTML = `
                 <p>Total traité : <strong>${total}</strong></p>
                 <p>Trouvés par BAN : <span class="text-blue-600 font-bold">${countBan}</span></p>
-                <p>Trouvés par Nominatim : <span class="text-orange-600 font-bold">${countNom}</span></p>
+                <p>Trouvés par Nominatim : <span class="text-purple-600 font-bold">${countNom}</span></p>
                 <p>Échecs : <span class="text-red-600 font-bold">${countFail}</span></p>
             `;
 
