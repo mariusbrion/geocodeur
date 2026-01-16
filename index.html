@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Géocodeur Nominatim France</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .loader {
+            border-top-color: #3498db;
+            animation: spinner 1.5s linear infinite;
+        }
+        @keyframes spinner {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen p-4 md:p-8 font-sans">
+
+    <div class="max-w-4xl mx-auto bg-white rounded-xl shadow-lg p-6">
+        <header class="mb-8 border-b pb-4">
+            <h1 class="text-2xl font-bold text-gray-800">Géocodeur CSV (Nominatim)</h1>
+            <p class="text-sm text-gray-500">Convertissez vos adresses/villes en coordonnées GPS (Latitude/Longitude).</p>
+            <div class="mt-2 p-3 bg-blue-50 text-blue-700 text-xs rounded border border-blue-100">
+                <strong>Note :</strong> Nominatim limite les requêtes à 1 par seconde. Le traitement peut être long pour les gros fichiers.
+            </div>
+        </header>
+
+        <!-- Etape 1 : Chargement -->
+        <section id="step-1" class="mb-8">
+            <label class="block mb-2 font-medium text-gray-700">1. Sélectionnez votre fichier CSV</label>
+            <input type="file" id="csvFile" accept=".csv" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer border rounded-lg p-1">
+        </section>
+
+        <!-- Etape 2 : Mapping (masqué au début) -->
+        <section id="step-2" class="mb-8 hidden">
+            <h2 class="font-medium text-gray-700 mb-4 border-t pt-4">2. Configuration des colonnes</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <!-- Bloc LIBGEO -->
+                <div class="p-4 bg-gray-50 rounded-lg border">
+                    <h3 class="font-bold text-sm mb-3">Lieu 1 (LIBGEO)</h3>
+                    <div class="space-y-3">
+                        <div>
+                            <label class="text-xs text-gray-500 uppercase">Nom de la ville</label>
+                            <select id="col-libgeo" class="w-full mt-1 p-2 border rounded bg-white text-sm"></select>
+                        </div>
+                        <div>
+                            <label class="text-xs text-gray-500 uppercase">Code Postal (Optionnel)</label>
+                            <select id="col-cpgeo" class="w-full mt-1 p-2 border rounded bg-white text-sm">
+                                <option value="">--- Aucun ---</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Bloc L_DCLT -->
+                <div class="p-4 bg-gray-50 rounded-lg border">
+                    <h3 class="font-bold text-sm mb-3">Lieu 2 (L_DCLT)</h3>
+                    <div class="space-y-3">
+                        <div>
+                            <label class="text-xs text-gray-500 uppercase">Nom de la ville</label>
+                            <select id="col-ldclt" class="w-full mt-1 p-2 border rounded bg-white text-sm"></select>
+                        </div>
+                        <div>
+                            <label class="text-xs text-gray-500 uppercase">Code Postal (Optionnel)</label>
+                            <select id="col-cpdclt" class="w-full mt-1 p-2 border rounded bg-white text-sm">
+                                <option value="">--- Aucun ---</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <button id="startBtn" class="mt-6 w-full bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-700 transition">Lancer le géocodage</button>
+        </section>
+
+        <!-- Etape 3 : Progression -->
+        <section id="step-3" class="hidden">
+            <div class="text-center py-8">
+                <div class="loader ease-linear rounded-full border-4 border-t-4 border-gray-200 h-12 w-12 mb-4 mx-auto"></div>
+                <h3 class="text-xl font-semibold text-gray-700">Géocodage en cours...</h3>
+                <p id="progress-text" class="text-sm text-gray-500 mt-2">0 / 0 lignes traitées</p>
+                <div class="w-full bg-gray-200 rounded-full h-2.5 mt-4 max-w-md mx-auto">
+                    <div id="progress-bar" class="bg-blue-600 h-2.5 rounded-full" style="width: 0%"></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Etape 4 : Téléchargement -->
+        <section id="step-4" class="hidden text-center py-8 border-t">
+            <div class="inline-flex items-center justify-center w-16 h-16 bg-green-100 text-green-600 rounded-full mb-4">
+                <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+            </div>
+            <h3 class="text-xl font-semibold text-gray-800">Traitement terminé !</h3>
+            <p class="text-sm text-gray-500 mb-6">Le fichier inclut désormais les colonnes latitude/longitude.</p>
+            <button id="downloadBtn" class="bg-green-600 text-white font-bold py-3 px-8 rounded-lg hover:bg-green-700 transition shadow-lg">Télécharger le CSV résultat</button>
+        </section>
+    </div>
+
+    <script>
+        let rawData = [];
+        let headers = [];
+        let results = [];
+        let isProcessing = false;
+
+        const csvInput = document.getElementById('csvFile');
+        const startBtn = document.getElementById('startBtn');
+        const downloadBtn = document.getElementById('downloadBtn');
+
+        // Lecture du fichier CSV
+        csvInput.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            Papa.parse(file, {
+                header: true,
+                skipEmptyLines: true,
+                complete: function(results) {
+                    rawData = results.data;
+                    headers = results.meta.fields;
+                    setupMapping();
+                }
+            });
+        });
+
+        // Préparation du mapping des colonnes
+        function setupMapping() {
+            const selects = ['col-libgeo', 'col-cpgeo', 'col-ldclt', 'col-cpdclt'];
+            selects.forEach(id => {
+                const select = document.getElementById(id);
+                select.innerHTML = id.includes('cp') ? '<option value="">--- Aucun ---</option>' : '';
+                
+                headers.forEach(h => {
+                    const option = document.createElement('option');
+                    option.value = h;
+                    option.textContent = h;
+                    
+                    // Tentative d'auto-detection
+                    const lowerH = h.toLowerCase();
+                    if (id === 'col-libgeo' && (lowerH.includes('libgeo') || lowerH.includes('ville'))) option.selected = true;
+                    if (id === 'col-ldclt' && (lowerH.includes('ldclt') || lowerH.includes('dclt'))) option.selected = true;
+                    
+                    select.appendChild(option);
+                });
+            });
+            document.getElementById('step-2').classList.remove('hidden');
+        }
+
+        // Fonction de délai pour respecter le rate limit de Nominatim
+        const delay = ms => new Promise(res => setTimeout(res, ms));
+
+        // Fonction de géocodage d'une adresse
+        async function geocode(city, cp) {
+            if (!city) return { lat: '', lon: '' };
+            
+            // On construit la requête. Utiliser le CP aide énormément à la précision.
+            const query = cp ? `${city} ${cp} France` : `${city} France`;
+            const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=1`;
+            
+            try {
+                const response = await fetch(url, {
+                    headers: { 'User-Agent': 'CSV-Geocoder-Tool' }
+                });
+                const data = await response.json();
+                if (data && data.length > 0) {
+                    return { lat: data[0].lat, lon: data[0].lon };
+                }
+            } catch (err) {
+                console.error("Erreur de géocodage:", err);
+            }
+            return { lat: '', lon: '' };
+        }
+
+        // Lancement du processus
+        startBtn.addEventListener('click', async () => {
+            if (isProcessing) return;
+            isProcessing = true;
+
+            const map = {
+                libgeo: document.getElementById('col-libgeo').value,
+                cpgeo: document.getElementById('col-cpgeo').value,
+                ldclt: document.getElementById('col-ldclt').value,
+                cpdclt: document.getElementById('col-cpdclt').value
+            };
+
+            document.getElementById('step-1').classList.add('hidden');
+            document.getElementById('step-2').classList.add('hidden');
+            document.getElementById('step-3').classList.remove('hidden');
+
+            const progressText = document.getElementById('progress-text');
+            const progressBar = document.getElementById('progress-bar');
+
+            results = [];
+            const total = rawData.length;
+
+            for (let i = 0; i < total; i++) {
+                const row = { ...rawData[i] };
+                
+                // 1. Géocodage de LIBGEO
+                const geo1 = await geocode(row[map.libgeo], map.cpgeo ? row[map.cpgeo] : '');
+                row['latitude_libgeo'] = geo1.lat;
+                row['longitude_libgeo'] = geo1.lon;
+                // Supprimer l'ancienne colonne si désiré (selon votre demande "remplacer")
+                // delete row[map.libgeo]; 
+
+                await delay(1000); // Respecter 1 req/sec
+
+                // 2. Géocodage de L_DCLT
+                const geo2 = await geocode(row[map.ldclt], map.cpdclt ? row[map.cpdclt] : '');
+                row['latitude_ldclt'] = geo2.lat;
+                row['longitude_ldclt'] = geo2.lon;
+                // delete row[map.ldclt];
+
+                results.push(row);
+
+                // Mise à jour UI
+                const percent = Math.round(((i + 1) / total) * 100);
+                progressText.innerText = `${i + 1} / ${total} lignes traitées`;
+                progressBar.style.width = `${percent}%`;
+
+                await delay(1000); // Respecter 1 req/sec entre les deux villes ou la suivante
+            }
+
+            document.getElementById('step-3').classList.add('hidden');
+            document.getElementById('step-4').classList.remove('hidden');
+        });
+
+        // Téléchargement du résultat
+        downloadBtn.addEventListener('click', () => {
+            const csv = Papa.unparse(results);
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            const url = URL.createObjectURL(blob);
+            link.setAttribute("href", url);
+            link.setAttribute("download", "resultat_geocodage.csv");
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        });
+    </script>
+</body>
+</html>
